@@ -1,0 +1,19 @@
+name: qcgpu
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  # Core dependencies
+  - python==3.10.*
+  - pandas
+  - scipy
+  - tqdm
+  - matplotlib
+
+  # Jupyter
+  - jupyterlab
+
+  # Dependencies for projects not yet on conda
+  - pip
+  - pip:
+    - git+https://gitlab.com/ase/ase.git
