@@ -1,6 +1,7 @@
 """Compute the redox potentials for all example molecules"""
 from argparse import ArgumentParser
 from io import StringIO
+from pathlib import Path
 from time import perf_counter
 
 from ase.calculators.nwchem import NWChem
@@ -11,11 +12,11 @@ from ase import Atoms
 from tqdm import tqdm
 import pandas as pd
 
-
 if __name__ == "__main__":
     # Parse the arguments
     parser = ArgumentParser()
     parser.add_argument('--basis-set', default='aug-cc-pvdz')
+    parser.add_argument('--pre-basis-set', default='none', help='Basis set used to get initial guess')
     parser.add_argument('--xc', choices=['B3LYP'], default='B3LYP', help='XC functional')
 
     args = parser.parse_args()
@@ -23,7 +24,7 @@ if __name__ == "__main__":
     # Make the calculator
     calc = NWChem(
         command='mpirun -n 12 nwchem PREFIX.nwi > PREFIX.nwo 2> /dev/null',
-        xc=args.xc, basis=args.basis_set
+        xc=args.xc, basis=args.basis_set, set={'lindep:n_dep': 0}
     )
 
     # Read in the example data
@@ -43,12 +44,27 @@ if __name__ == "__main__":
                     tqdm.update(1)
                     continue
 
-            # If not, run an optimization
+            # If not, first run an energy computation to converge the wfcs
             start_time = perf_counter()
-            calc.set()
-            calc.set(charge=charge, dft={'mult': 1 if charge == 0 else 2, 'iterations': 100})
+            mult = 1 if charge == 0 else 2
+            wfc_file = Path() / 'wfc.guess.movecs'
+            calc.set(charge=charge,
+                     dft={'mult': mult, 'iterations': 1000, 'vectors': {'output': str(wfc_file.absolute())}})
+            if args.pre_basis_set != "none":
+                calc.parameters['pretasks'] = [ 
+                    # Start with a small basis set
+                    {'theory': 'dft', 'basis': args.pre_basis_set, 'dft': {'mult': mult, 'iterations': 1000}},
+                ]
             atoms: Atoms = row['atoms'].copy()
+
             atoms.set_calculator(calc)
+            guess_start_time = perf_counter()
+            atoms.get_potential_energy()
+            guess_runtime = perf_counter() - guess_start_time
+
+            # Now that the wavefunction's converged, run the optimization using it as a starting guess
+            calc.parameters.pop('pretasks', None)  # Only use the large basis set now that we're converged
+            calc.parameters['dft']['vectors']['input'] = str(wfc_file.absolute())
             dyn = LBFGS(atoms)
             dyn.run(fmax=0.04)
 
@@ -56,5 +72,7 @@ if __name__ == "__main__":
             calc.get_forces()
             with connect('data.db') as db:
                 db.write(atoms, inchi_key=row['inchi_key'], state=state,
-                         runtime=perf_counter() - start_time, **settings)
+                         runtime=perf_counter() - start_time, 
+                         guess_runtime=guess_runtime,
+                         **settings)
             tqdm.update(1)
