@@ -17,6 +17,7 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--basis-set', default='aug-cc-pvdz')
     parser.add_argument('--pre-basis-set', default='none', help='Basis set used to get initial guess')
+    parser.add_argument('--pre-relax-threshold', type=float, default='none', help='Force threshold to "pre-relax" with pre-basis set')
     parser.add_argument('--xc', choices=['B3LYP'], default='B3LYP', help='XC functional')
 
     args = parser.parse_args()
@@ -24,7 +25,7 @@ if __name__ == "__main__":
     # Make the calculator
     calc = NWChem(
         command='mpirun -n 12 nwchem PREFIX.nwi > PREFIX.nwo 2> /dev/null',
-        xc=args.xc, basis=args.basis_set, set={'lindep:n_dep': 0}
+        xc=args.xc, basis=args.basis_set, set={'lindep:n_dep': 0}, dft={'iterations': 1000}
     )
 
     # Read in the example data
@@ -44,21 +45,42 @@ if __name__ == "__main__":
                     tqdm.update(1)
                     continue
 
-            # If not, first run an energy computation to converge the wfcs
+            # Get the atoms
             start_time = perf_counter()
-            mult = 1 if charge == 0 else 2
             wfc_file = Path() / 'wfc.guess.movecs'
-            calc.set(charge=charge,
-                     dft={'mult': mult, 'iterations': 1000, 'vectors': {'output': str(wfc_file.absolute())}})
+            atoms: Atoms = row['atoms'].copy()
+            atoms.set_calculator(calc)
+
+            # Update the charges
+            calc.parameters['dft']['vectors'] = {'output': str(wfc_file.absolute())}
+            calc.parameters['charge'] = charge
+            mult = 1 if charge == 0 else 2
+            calc.parameters['dft']['mult'] = mult
+
+            # If there are pre-basis-steps, relax with them first
+            guess_start_time = perf_counter()
+            if args.pre_relax_threshold != "none":
+                # Run an energy convergence with the small basis set
+                calc.parameters['basis'] = args.pre_basis_set
+                atoms.get_potential_energy()
+
+                # Let it use that wavefunction as a starting guess
+                calc.parameters['dft']['vectors']['input'] = str(wfc_file.absolute())
+
+                # Run the expensive relaxation
+                dyn = LBFGS(atoms)
+                dyn.run(fmax=float(args.pre_relax_threshold))
+                calc.parameters['basis'] = args.basis_set
+                calc.reset()
+
+            # Run an energy computation to converge the wfcs
             if args.pre_basis_set != "none":
-                calc.parameters['pretasks'] = [ 
+                calc.parameters['pretasks'] = [
                     # Start with a small basis set
                     {'theory': 'dft', 'basis': args.pre_basis_set, 'dft': {'mult': mult, 'iterations': 1000}},
                 ]
-            atoms: Atoms = row['atoms'].copy()
 
             atoms.set_calculator(calc)
-            guess_start_time = perf_counter()
             atoms.get_potential_energy()
             guess_runtime = perf_counter() - guess_start_time
 
@@ -72,7 +94,7 @@ if __name__ == "__main__":
             calc.get_forces()
             with connect('data.db') as db:
                 db.write(atoms, inchi_key=row['inchi_key'], state=state,
-                         runtime=perf_counter() - start_time, 
+                         runtime=perf_counter() - start_time,
                          guess_runtime=guess_runtime,
                          **settings)
             tqdm.update(1)
