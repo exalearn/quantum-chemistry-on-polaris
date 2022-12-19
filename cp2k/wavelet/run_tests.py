@@ -1,8 +1,8 @@
 """Compute the redox potentials for all example molecules"""
 from argparse import ArgumentParser
-from time import perf_counter
-from shutil import rmtree
 from io import StringIO
+from shutil import rmtree
+from time import perf_counter
 
 from ase.calculators.cp2k import CP2K
 from ase.optimize import LBFGS
@@ -23,7 +23,7 @@ def buffer_cell(atoms, buffer_size: float = 3.):
     """
 
     atoms.positions -= atoms.positions.min(axis=0)
-    atoms.cell = atoms.positions.max(axis=0) + buffer_size * 2
+    atoms.cell = [atoms.positions.max() + buffer_size * 2] * 3
     atoms.positions += atoms.cell.max(axis=0) / 2 - atoms.positions.mean(axis=0)
 
 
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     # Parse the arguments
     parser = ArgumentParser()
     parser.add_argument('--basis-set', default='AUG-DZVP-GTH')
-    parser.add_argument('--cutoff', default=350, type=int, help='Cutoff for the gird')
+    parser.add_argument('--cutoff', default=500, type=int, help='Cutoff for the gird')
     parser.add_argument('--buffer', default=6, type=float, help='Amount of vacuum around the molecule')
     parser.add_argument('--xc', choices=['BLYP'], default='BLYP', help='XC functional')
 
@@ -42,7 +42,6 @@ if __name__ == "__main__":
         'BLYP': 'GTH-BLYP'
     }[args.xc]
 
-    #   OT and an outer SCF loop seemed to be the key for getting this to converge properly
     cp2k_opts = dict(
         xc=None,
         inp=f"""&FORCE_EVAL
@@ -53,7 +52,7 @@ if __name__ == "__main__":
   &END XC
   &POISSON
      PERIODIC NONE
-     PSOLVER MT
+     PSOLVER WAVELET
   &END POISSON
   &SCF
     &OUTER_SCF
@@ -64,7 +63,6 @@ if __name__ == "__main__":
     &END OT
   &END SCF
 &END DFT
-
 &SUBSYS
   &TOPOLOGY
     &CENTER_COORDINATES
@@ -76,10 +74,10 @@ if __name__ == "__main__":
         basis_set=args.basis_set,
         pseudo_potential=pp,
         poisson_solver=None,
-        command='/home/lward/Software/cp2k-2022.2/exe/local/cp2k_shell.ssmp'
+        stress_tensor=False
     )
     rmtree('run', ignore_errors=True)
-    calc = CP2K(cutoff=args.cutoff * units.Ry, max_scf=10, directory='run', **cp2k_opts)
+    calc = CP2K(cutoff=args.cutoff * units.Ry, directory='run', max_scf=10, **cp2k_opts)
 
     # Read in the example data
     data = pd.read_csv('../../data/example_molecules.csv')

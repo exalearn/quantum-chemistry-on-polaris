@@ -76,10 +76,11 @@ if __name__ == "__main__":
         basis_set=args.basis_set,
         pseudo_potential=pp,
         poisson_solver=None,
-        command='/home/lward/Software/cp2k-2022.2/exe/local/cp2k_shell.ssmp'
     )
     rmtree('run', ignore_errors=True)
-    calc = CP2K(cutoff=args.cutoff * units.Ry, max_scf=10, directory='run', **cp2k_opts)
+    calc = CP2K(cutoff=args.cutoff * units.Ry, max_scf=10, directory='run',
+                command='/home/lward/Software/cp2k-2022.2/exe/local_cuda/cp2k_shell.ssmp',
+                **cp2k_opts)
 
     # Read in the example data
     data = pd.read_csv('../../data/example_molecules.csv')
