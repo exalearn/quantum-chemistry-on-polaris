@@ -36,7 +36,7 @@ def buffer_cell(atoms, buffer_size: float = 3.):
     
     
 @python_app
-def run_cp2k(atoms, xc, basis_set, cutoff, charge, num_nodes):
+def run_cp2k(atoms, xc, basis_set, cutoff, charge):
     """Run a CP2k relaxation"""
     from ase.calculators.cp2k import CP2K
     from ase.optimize import LBFGS
@@ -90,9 +90,7 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge, num_nodes):
     os.mkdir(run_dir)
     calc = CP2K(cutoff=cutoff * units.Ry, max_scf=10,
                 directory=run_dir,
-                command=f'mpiexec -n {num_nodes * 4} --ppn 4 --cpu-bind depth --depth 8 -env OMP_NUM_THREADS=8 '
-                        '/lus/grand/projects/CSC249ADCD08/cp2k/set_affinity_gpu_polaris.sh '
-                        '/lus/grand/projects/CSC249ADCD08/cp2k/cp2k-git/exe/local_cuda/cp2k_shell.psmp',
+                command=f'/lus/grand/projects/CSC249ADCD08/cp2k/cp2k-git/exe/local_cuda/cp2k_shell.ssmp',
                 **cp2k_opts)
     
     # If not, run an optimization
@@ -123,8 +121,6 @@ if __name__ == "__main__":
     parser.add_argument('--cutoff', default=350, type=int, help='Cutoff for the gird')
     parser.add_argument('--buffer', default=6, type=float, help='Amount of vacuum around the molecule')
     parser.add_argument('--xc', choices=['BLYP'], default='BLYP', help='XC functional')
-    parser.add_argument('--num-nodes', default=1, type=int, help='Number of nodes per calculation')
-    
 
     args = parser.parse_args()
     
@@ -133,10 +129,11 @@ if __name__ == "__main__":
         retries=1,
         executors=[
             HighThroughputExecutor(
+                available_accelerators=4,  # Ensures one worker per accelerator
                 address=address_by_hostname(),
+                cpu_affinity="alternating",  # Prevents thread contention
                 prefetch_capacity=0,  # Increase if you have many more tasks than workers
                 start_method="fork",  # Needed to avoid interactions between MPI and os.fork
-                max_workers=1,
                 provider=PBSProProvider(
                     account="CSC249ADCD08",
                     worker_init=f"""
@@ -151,11 +148,13 @@ hostname
 pwd
 conda activate /lus/grand/projects/CSC249ADCD08/quantum-chemistry-on-polaris/env""",
                     walltime="1:00:00",
-                    queue="debug-scaling",
+                    queue="debug",
                     scheduler_options="#PBS -l filesystems=home:eagle:grand",
-                    launcher=SimpleLauncher(),
+                     launcher=MpiExecLauncher(
+                         bind_cmd="--cpu-bind", overrides="--depth=64 --ppn 1"
+                     ),  # Ensures 1 manger per node and allows it to divide work to all 64 cores
                     select_options="ngpus=4",
-                    nodes_per_block=args.num_nodes,
+                    nodes_per_block=1,
                     min_blocks=0,
                     max_blocks=1,
                     cpus_per_node=64,
@@ -184,7 +183,7 @@ conda activate /lus/grand/projects/CSC249ADCD08/quantum-chemistry-on-polaris/env
             buffer_cell(atoms, buffer_size=args.buffer)
             
             # Submit the calculation
-            future = run_cp2k(atoms, args.xc, args.basis_set, args.cutoff, charge, args.num_nodes)
+            future = run_cp2k(atoms, args.xc, args.basis_set, args.cutoff, charge)
             
             # Add some metadata to the future
             future.info = {'inchi_key': row['inchi_key'], 'state': state}

@@ -59,3 +59,10 @@ mpiexec -n $((NNODES * 4)) --ppn 4 --cpu-bind depth --depth 8 -env OMP_NUM_THREA
     /lus/grand/projects/CSC249ADCD08/cp2k/cp2k-git/exe/local_cuda/cp2k_shell.psmp
 ```
 
+You can run the serial version by calling the `ssmp` version of CP2K and pinning it to a specific GPU
+
+```bash
+CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=8 /lus/grand/projects/CSC249ADCD08/cp2k/cp2k-git/exe/local_cuda/cp2k_shell.psmp
+```
+
+    Parsl will automatically set the CUDA and OMP environment variables [if patched](https://github.com/Parsl/parsl/pull/2529)
