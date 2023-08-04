@@ -22,17 +22,20 @@ from parsl import python_app
 import parsl
 
 
-def buffer_cell(atoms, buffer_size: float = 3.):
-    """How to buffer the cell such that it has a vacuum layer around the side
 
+def buffer_cell(atoms, buffer_size: float = 3.): 
+    """How to buffer the cell such that it has a vacuum layer around the side
+    
     Args:
         atoms: Atoms to be centered
-        buffer_size: Size of the buffer to place around the atoms
+        positions: Size of the buffer to place around the atoms
     """
 
     atoms.positions -= atoms.positions.min(axis=0)
-    atoms.cell = atoms.positions.max(axis=0) + buffer_size * 2
+    atoms.cell = [atoms.positions.max() + buffer_size * 2] * 3
     atoms.positions += atoms.cell.max(axis=0) / 2 - atoms.positions.mean(axis=0)
+
+
     
     
 @python_app
@@ -61,8 +64,12 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge):
   &END XC
   &POISSON
      PERIODIC NONE
-     PSOLVER MT
+     PSOLVER WAVELET
   &END POISSON
+  &MGRID
+     NGRIDS 5
+     REL_CUTOFF 60
+  &END MGRID
   &SCF
     &OUTER_SCF
      MAX_SCF 5
@@ -80,7 +87,7 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge):
   &END
 &END FORCE_EVAL
 """,
-        basis_set_file='GTH_BASIS_SETS',
+        basis_set_file='BASIS_MOLOPT',
         basis_set=basis_set,
         pseudo_potential=pp,
         poisson_solver=None,
@@ -117,10 +124,10 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge):
 if __name__ == "__main__":
     # Parse the arguments
     parser = ArgumentParser()
-    parser.add_argument('--basis-set', default='AUG-DZVP-GTH')
+    parser.add_argument('--basis-set', default='DZVP-MOLOPT-GTH')
     parser.add_argument('--cutoff', default=350, type=int, help='Cutoff for the gird')
     parser.add_argument('--buffer', default=6, type=float, help='Amount of vacuum around the molecule')
-    parser.add_argument('--xc', choices=['BLYP'], default='BLYP', help='XC functional')
+    parser.add_argument('--xc', choices=['BLYP', 'B3LYP'], default='BLYP', help='XC functional')
 
     args = parser.parse_args()
     
@@ -198,3 +205,4 @@ conda activate /lus/grand/projects/CSC249ADCD08/quantum-chemistry-on-polaris/env
         atoms = read(out, format='json')
         with connect('data.db') as db:
             db.write(atoms, runtime=runtime, **settings, **future.info)
+ 

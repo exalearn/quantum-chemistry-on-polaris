@@ -1,6 +1,7 @@
 """Compute the redox potentials for all example molecules"""
 from argparse import ArgumentParser
 from time import perf_counter
+from platform import node
 from shutil import rmtree
 from io import StringIO
 
@@ -30,19 +31,22 @@ def buffer_cell(atoms, buffer_size: float = 3.):
 if __name__ == "__main__":
     # Parse the arguments
     parser = ArgumentParser()
-    parser.add_argument('--basis-set', default='AUG-DZVP-GTH')
+    parser.add_argument('--basis-set', default='DZVP-MOLOPT-GTH')
     parser.add_argument('--cutoff', default=350, type=int, help='Cutoff for the gird')
     parser.add_argument('--buffer', default=6, type=float, help='Amount of vacuum around the molecule')
-    parser.add_argument('--xc', choices=['BLYP'], default='BLYP', help='XC functional')
+    parser.add_argument('--xc', choices=['BLYP', 'B3LYP'], default='BLYP', help='XC functional')
+    parser.add_argument('--gpu', action='store_true', help='Use the GPU version')
 
     args = parser.parse_args()
 
     # Make the calculator
     pp = {
-        'BLYP': 'GTH-BLYP'
+        'BLYP': 'GTH-BLYP',
+        'B3LYP': 'GTH-BLYP',
     }[args.xc]
 
     #   OT and an outer SCF loop seemed to be the key for getting this to converge properly
+    #   I also set REL_CUTOFF to a larger value because I did not converge it explicitly
     cp2k_opts = dict(
         xc=None,
         inp=f"""&FORCE_EVAL
@@ -55,6 +59,10 @@ if __name__ == "__main__":
      PERIODIC NONE
      PSOLVER MT
   &END POISSON
+  &MGRID
+     NGRIDS 5
+     REL_CUTOFF 60
+  &END MGRID
   &SCF
     &OUTER_SCF
      MAX_SCF 5
@@ -72,14 +80,15 @@ if __name__ == "__main__":
   &END
 &END FORCE_EVAL
 """,
-        basis_set_file='GTH_BASIS_SETS',
+        basis_set_file='BASIS_MOLOPT' if 'molopt' in args.basis_set.lower() else 'GTH_BASIS_SETS',
         basis_set=args.basis_set,
         pseudo_potential=pp,
         poisson_solver=None,
     )
     rmtree('run', ignore_errors=True)
     calc = CP2K(cutoff=args.cutoff * units.Ry, max_scf=10, directory='run',
-                command='/home/lward/Software/cp2k-2022.2/exe/local_cuda/cp2k_shell.ssmp',
+                command='/home/lward/Software/cp2k-2022.2/exe/local_cuda/cp2k_shell.ssmp' if args.gpu else  \
+                        '/home/lward/Software/cp2k-2022.2/exe/local/cp2k_shell.ssmp',
                 **cp2k_opts)
 
     # Read in the example data
@@ -95,7 +104,7 @@ if __name__ == "__main__":
 
             # Check if it has been done
             with connect('data.db') as db:
-                if db.count(inchi_key=row['inchi_key'], state=state, **settings) > 0:
+                if db.count(inchi_key=row['inchi_key'], state=state, hostname=node(), **settings) > 0:
                     tqdm.update(1)
                     continue
 
@@ -112,5 +121,5 @@ if __name__ == "__main__":
             calc.get_forces()
             with connect('data.db') as db:
                 db.write(atoms, inchi_key=row['inchi_key'], state=state,
-                         runtime=perf_counter() - start_time,  **settings)
+                         runtime=perf_counter() - start_time, hostname=node(), **settings)
             tqdm.update(1)
