@@ -1,22 +1,23 @@
 # Installing on Polaris
 
-We compile CP2K using the GNU compiler suite and CUDA 11.4 on Polaris. 
+We compile CP2K v2024.1 using the GNU compiler suite and CUDA 11.8 on Polaris. 
 
-The install script I use builds most libraries from scratch and links to 
+The install script builds most libraries from scratch
 
 ```bash
-# Set up the modules to get GNU compilers and CUDA 11.4
-#  We choose CUDA 11.4 to be compatible with drivers on the compute nodes
+# Set up the modules to get GNU compilers and CUDA 11.8
+#  We choose CUDA 11.8 to be compatible with drivers on the compute nodes
+#   and to be compatible with the latest ELPA
 #  We also load the cray implementations of FFTW and LibSci
 module reset
 module swap PrgEnv-nvhpc PrgEnv-gnu
 module load cray-fftw
-module load cudatoolkit-standalone/11.4.4
+module load cudatoolkit-standalone/11.8.0
 module load cray-libsci
 module list
 
 # Define CUDA_PATH, needed by the ELPA build script
-export CUDA_PATH=/soft/compilers/cudatoolkit/cuda-11.4.4
+export CUDA_PATH=/soft/compilers/cudatoolkit/cuda-11.8.0
 
 # Debug the environmental variables
 echo $NVIDIA_PATH
@@ -49,8 +50,7 @@ NNODES=`wc -l < $PBS_NODEFILE`
 # Set up the environment
 module reset
 module swap PrgEnv-nvhpc PrgEnv-gnu
-module load conda
-module load cudatoolkit-standalone/11.4.4
+module load cudatoolkit-standalone/11.8.0
 module load cray-libsci cray-fftw
 
 # Launch CP2k
