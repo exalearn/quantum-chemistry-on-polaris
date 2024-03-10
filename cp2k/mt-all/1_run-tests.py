@@ -14,6 +14,10 @@ from ase import Atoms
 from tqdm import tqdm
 import pandas as pd
 
+_hfx_fraction = {
+    'HYB_GGA_XC_B3LYP': 0.2
+}
+
 
 def buffer_cell(atoms, buffer_size: float = 3.):
     """How to buffer the cell such that it has a vacuum layer around the side
@@ -31,8 +35,8 @@ def buffer_cell(atoms, buffer_size: float = 3.):
 if __name__ == "__main__":
     # Parse the arguments
     parser = ArgumentParser()
-    parser.add_argument('--basis-set', default='DZVP-ALL')
-    parser.add_argument('--basis-set-file', default='ALL_BASIS_SETS')
+    parser.add_argument('--basis-set', default='def2-TZVPD')
+    parser.add_argument('--basis-set-file', default='../basis-sets/DEF2_BASIS_SETS')
     parser.add_argument('--cutoff', default=350, type=int, help='Cutoff for the grid')
     parser.add_argument('--rel-cutoff', default=60, type=int, help='Relative cutoff for multigrid.')
     parser.add_argument('--buffer', default=6, type=float, help='Amount of vacuum around the molecule')
@@ -50,6 +54,15 @@ if __name__ == "__main__":
          &{args.xc}
          &END {args.xc}
      &END XC_FUNCTIONAL
+     &HF
+        &SCREENING
+            EPS_SCHWARZ 1.0E-10 
+        &END
+        &MEMORY
+            MAX_MEMORY  5 
+        &END
+        FRACTION {_hfx_fraction[args.xc]}
+    &END HF
   &END XC
   &POISSON
      PERIODIC NONE
@@ -61,7 +74,7 @@ if __name__ == "__main__":
     &END OUTER_SCF
     &OT T
       PRECONDITIONER FULL_ALL
-  &END OT
+    &END OT
   &END SCF
   &QS
      METHOD GAPW
@@ -83,9 +96,13 @@ if __name__ == "__main__":
         stress_tensor=False,
     )
     rmtree('run', ignore_errors=True)
-    calc = CP2K(cutoff=args.cutoff * units.Ry, max_scf=32, directory='run',
-                command='/home/lward/Software/cp2k-2022.2/exe/local_cuda/cp2k_shell.ssmp',
-                **cp2k_opts)
+    calc = CP2K(
+        cutoff=args.cutoff * units.Ry,
+        max_scf=64,
+        directory='run',
+        command='/home/lward/Software/cp2k-2024.1/exe/local_cuda/cp2k_shell.ssmp',
+        **cp2k_opts
+    )
 
     # Read in the example data
     data = pd.read_csv('../../data/example_molecules.csv')
