@@ -16,4 +16,5 @@ dependencies:
   # Dependencies for projects not yet on conda
   - pip
   - pip:
+    - parsl
     - git+https://gitlab.com/ase/ase.git
