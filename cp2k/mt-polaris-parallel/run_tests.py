@@ -13,7 +13,7 @@ from ase import Atoms
 from tqdm import tqdm
 import pandas as pd
 
-from parsl.addresses import address_by_hostname
+from parsl.addresses import address_by_interface
 from parsl.executors import HighThroughputExecutor
 from parsl.launchers import MpiExecLauncher, SimpleLauncher
 from parsl.providers import PBSProProvider
@@ -69,7 +69,7 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge, num_nodes):
         &MEMORY
             MAX_MEMORY  32768 
         &END
-        FRACTION {_hfx_fraction[args.xc]}
+        FRACTION {_hfx_fraction[xc]}
     &END HF
   &END XC
   &POISSON
@@ -95,7 +95,7 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge, num_nodes):
 &END DFT
 &END FORCE_EVAL
 """,
-        basis_set_file='../DEF2_BASIS_SETS',
+        basis_set_file='/lus/eagle/projects/ExaMol/quantum-chemistry-on-polaris/cp2k/basis-sets/DEF2_BASIS_SETS',
         basis_set=basis_set,
         pseudo_potential='ALL',
         potential_file='ALL_POTENTIALS',
@@ -112,7 +112,7 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge, num_nodes):
                 directory=run_dir,
                 command=f'mpiexec -n {num_nodes * 4} --ppn 4 --cpu-bind depth --depth 8 -env OMP_NUM_THREADS=8 '
                         '/lus/grand/projects/CSC249ADCD08/cp2k/set_affinity_gpu_polaris.sh '
-                        '/lus/grand/projects/CSC249ADCD08/cp2k/cp2k-git/exe/local_cuda/cp2k_shell.psmp',
+                        '/lus/grand/projects/CSC249ADCD08/cp2k/cp2k-2024.1/exe/local_cuda/cp2k_shell.psmp',
                 **cp2k_opts)
     
     # If not, run an optimization
@@ -138,6 +138,7 @@ if __name__ == "__main__":
     # Parse the arguments
     parser = ArgumentParser()
     parser.add_argument('--basis-set', default='def2-TZVPD')
+    parser.add_argument('--xc', default='HYB_GGA_XC_B3LYP')
     parser.add_argument('--cutoff', default=350, type=int, help='Cutoff for the grid')
     parser.add_argument('--rel-cutoff', default=60, type=int, help='Relative cutoff for multigrid.')
     parser.add_argument('--buffer', default=6, type=float, help='Amount of vacuum around the molecule')
@@ -151,7 +152,7 @@ if __name__ == "__main__":
         retries=1,
         executors=[
             HighThroughputExecutor(
-                address=address_by_hostname(),
+                address=address_by_interface('bond0'),
                 prefetch_capacity=0,  # Increase if you have many more tasks than workers
                 max_workers=1,
                 provider=PBSProProvider(
@@ -159,16 +160,15 @@ if __name__ == "__main__":
                     worker_init=f"""
 module reset
 module swap PrgEnv-nvhpc PrgEnv-gnu
-module load conda
-module load cudatoolkit-standalone/11.4.4
+module load cudatoolkit-standalone/11.8.0
 module load cray-libsci cray-fftw
 module list
 cd {os.getcwd()}
 hostname
 pwd
-conda activate /lus/grand/projects/CSC249ADCD08/quantum-chemistry-on-polaris/env""",
+source activate /lus/eagle/projects/ExaMol/quantum-chemistry-on-polaris/env""",
                     walltime="1:00:00",
-                    queue="debug-scaling",
+                    queue="debug",
                     scheduler_options="#PBS -l filesystems=home:eagle:grand",
                     launcher=SimpleLauncher(),
                     select_options="ngpus=4",
