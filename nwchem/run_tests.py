@@ -17,8 +17,8 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--basis-set', default='aug-cc-pvdz')
     parser.add_argument('--pre-basis-set', default='none', help='Basis set used to get initial guess')
-    parser.add_argument('--pre-relax-threshold', type=float, default='none', help='Force threshold to "pre-relax" with pre-basis set')
-    parser.add_argument('--xc', choices=['B3LYP'], default='B3LYP', help='XC functional')
+    parser.add_argument('--pre-relax-threshold', type=float, default=-1, help='Force threshold to "pre-relax" with pre-basis set')
+    parser.add_argument('--xc', default='B3LYP', help='XC functional')
 
     args = parser.parse_args()
 
@@ -49,7 +49,7 @@ if __name__ == "__main__":
             start_time = perf_counter()
             wfc_file = Path() / 'wfc.guess.movecs'
             atoms: Atoms = row['atoms'].copy()
-            atoms.set_calculator(calc)
+            atoms.calc = calc
 
             # Update the charges
             calc.parameters['dft']['vectors'] = {'output': str(wfc_file.absolute())}
@@ -59,7 +59,7 @@ if __name__ == "__main__":
 
             # If there are pre-basis-steps, relax with them first
             guess_start_time = perf_counter()
-            if args.pre_relax_threshold != "none":
+            if args.pre_relax_threshold > 0:
                 # Run an energy convergence with the small basis set
                 calc.parameters['basis'] = args.pre_basis_set
                 atoms.get_potential_energy()
@@ -80,7 +80,7 @@ if __name__ == "__main__":
                     {'theory': 'dft', 'basis': args.pre_basis_set, 'dft': {'mult': mult, 'iterations': 1000}},
                 ]
 
-            atoms.set_calculator(calc)
+            atoms.calc = calc
             atoms.get_potential_energy()
             guess_runtime = perf_counter() - guess_start_time
 
