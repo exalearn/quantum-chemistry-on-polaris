@@ -13,13 +13,15 @@ from ase import Atoms
 from tqdm import tqdm
 import pandas as pd
 
-from parsl.addresses import address_by_hostname
+from parsl.addresses import address_by_interface
 from parsl.executors import HighThroughputExecutor
 from parsl.launchers import MpiExecLauncher, SimpleLauncher
 from parsl.providers import PBSProProvider
 from parsl.config import Config
 from parsl import python_app
 import parsl
+
+
 
 
 def buffer_cell(atoms, buffer_size: float = 3.):
@@ -46,18 +48,29 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge, num_nodes):
     from io import StringIO
     import os
     
-    # Build the calculator. Has to happen on-node as it starts CP2kx3005c0s37b1n0
-        # Make the calculator
-    pp = {
-        'BLYP': 'GTH-BLYP'
-    }[xc]
+    
+    _hfx_fraction = {
+        'HYB_GGA_XC_B3LYP': 0.2
+    }
+    
+    # Build the calculator. Has to happen on-node
     cp2k_opts = dict(
-        xc=None,
         inp=f"""&FORCE_EVAL
 &DFT
   &XC
-     &XC_FUNCTIONAL {xc}
+     &XC_FUNCTIONAL 
+         &{xc}
+         &END {xc}
      &END XC_FUNCTIONAL
+     &HF
+        &SCREENING
+            EPS_SCHWARZ 1.0E-10 
+        &END
+        &MEMORY
+            MAX_MEMORY  32768 
+        &END
+        FRACTION {_hfx_fraction[xc]}
+    &END HF
   &END XC
   &POISSON
      PERIODIC NONE
@@ -65,53 +78,58 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge, num_nodes):
   &END POISSON
   &SCF
     &OUTER_SCF
-     MAX_SCF 5
+      MAX_SCF 5
     &END OUTER_SCF
     &OT T
       PRECONDITIONER FULL_ALL
     &END OT
   &END SCF
+  &QS
+     METHOD GAPW
+  &END QS
+  &MGRID
+    REL_CUTOFF [Ry] 60
+    COMMENSURATE TRUE
+    NGRIDS 5
+  &END MGRID
 &END DFT
-
-&SUBSYS
-  &TOPOLOGY
-    &CENTER_COORDINATES
-    &END
-  &END
 &END FORCE_EVAL
 """,
-        basis_set_file='GTH_BASIS_SETS',
+        basis_set_file='/lus/eagle/projects/ExaMol/quantum-chemistry-on-polaris/cp2k/basis-sets/DEF2_BASIS_SETS',
         basis_set=basis_set,
-        pseudo_potential=pp,
+        pseudo_potential='ALL',
+        potential_file='ALL_POTENTIALS',
+        xc=None,
         poisson_solver=None,
+        stress_tensor=False,
     )
+    
     run_dir = f'run-{os.environ["PARSL_WORKER_POOL_ID"]}-{os.environ["PARSL_WORKER_RANK"]}'
     rmtree(run_dir, ignore_errors=True)
     os.mkdir(run_dir)
-    calc = CP2K(cutoff=cutoff * units.Ry, max_scf=10,
+    calc = CP2K(cutoff=cutoff * units.Ry, 
+                max_scf=64,
                 directory=run_dir,
                 command=f'mpiexec -n {num_nodes * 4} --ppn 4 --cpu-bind depth --depth 8 -env OMP_NUM_THREADS=8 '
                         '/lus/grand/projects/CSC249ADCD08/cp2k/set_affinity_gpu_polaris.sh '
-                        '/lus/grand/projects/CSC249ADCD08/cp2k/cp2k-git/exe/local_cuda/cp2k_shell.psmp',
+                        '/lus/grand/projects/CSC249ADCD08/cp2k/cp2k-2024.1/exe/local_cuda/cp2k_shell.psmp',
                 **cp2k_opts)
     
     # If not, run an optimization
-    start_time = perf_counter()
-    calc.set(charge=charge, uks=charge != 0)
-    atoms.set_calculator(calc)
-    dyn = LBFGS(atoms, logfile=f'{run_dir}/opt.log')
-    dyn.run(fmax=0.04)
+    with calc:
+        start_time = perf_counter()
+        calc.set(charge=charge, uks=charge != 0)
+        atoms.set_calculator(calc)
+        dyn = LBFGS(atoms, logfile=f'{run_dir}/opt.log')
+        dyn.run(fmax=0.04)
 
-    # Store the single point
-    calc.get_forces()
-    
-    # Convert it to JSON for tranmission
-    out = StringIO()
-    atoms.write(out, 'json')
-    atoms_msg = out.getvalue()
-    
-    # Force the calculator to die
-    calc.__del__()
+        # Store the single point
+        calc.get_forces()
+
+        # Convert it to JSON for tranmission
+        out = StringIO()
+        atoms.write(out, 'json')
+        atoms_msg = out.getvalue()
     
     return perf_counter() - start_time, atoms_msg
 
@@ -119,10 +137,11 @@ def run_cp2k(atoms, xc, basis_set, cutoff, charge, num_nodes):
 if __name__ == "__main__":
     # Parse the arguments
     parser = ArgumentParser()
-    parser.add_argument('--basis-set', default='AUG-DZVP-GTH')
-    parser.add_argument('--cutoff', default=350, type=int, help='Cutoff for the gird')
+    parser.add_argument('--basis-set', default='def2-TZVPD')
+    parser.add_argument('--xc', default='HYB_GGA_XC_B3LYP')
+    parser.add_argument('--cutoff', default=350, type=int, help='Cutoff for the grid')
+    parser.add_argument('--rel-cutoff', default=60, type=int, help='Relative cutoff for multigrid.')
     parser.add_argument('--buffer', default=6, type=float, help='Amount of vacuum around the molecule')
-    parser.add_argument('--xc', choices=['BLYP'], default='BLYP', help='XC functional')
     parser.add_argument('--num-nodes', default=1, type=int, help='Number of nodes per calculation')
     
 
@@ -133,25 +152,23 @@ if __name__ == "__main__":
         retries=1,
         executors=[
             HighThroughputExecutor(
-                address=address_by_hostname(),
+                address=address_by_interface('bond0'),
                 prefetch_capacity=0,  # Increase if you have many more tasks than workers
-                start_method="fork",  # Needed to avoid interactions between MPI and os.fork
                 max_workers=1,
                 provider=PBSProProvider(
-                    account="CSC249ADCD08",
+                    account="ExaMol",
                     worker_init=f"""
 module reset
 module swap PrgEnv-nvhpc PrgEnv-gnu
-module load conda
-module load cudatoolkit-standalone/11.4.4
+module load cudatoolkit-standalone/11.8.0
 module load cray-libsci cray-fftw
 module list
 cd {os.getcwd()}
 hostname
 pwd
-conda activate /lus/grand/projects/CSC249ADCD08/quantum-chemistry-on-polaris/env""",
+source activate /lus/eagle/projects/ExaMol/quantum-chemistry-on-polaris/env""",
                     walltime="1:00:00",
-                    queue="debug-scaling",
+                    queue="debug",
                     scheduler_options="#PBS -l filesystems=home:eagle:grand",
                     launcher=SimpleLauncher(),
                     select_options="ngpus=4",
